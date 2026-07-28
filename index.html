@@ -174,6 +174,35 @@
     display:inline-flex; align-items:center; gap:6px;
     background:var(--chip-bg); border-radius:999px; padding:4px 6px 4px 12px;
     font-size:12.5px; font-weight:600;
+    cursor:grab; touch-action:none; user-select:none;
+  }
+  .seat-chip:active{ cursor:grabbing; }
+  .seat-chip.dragging-source{ opacity:.3; }
+
+  .pool-section{ margin-bottom:14px; }
+  .pool-label{ font-size:11.5px; color:var(--ink-soft); font-weight:700; margin-bottom:6px; }
+  .unassigned-pool{
+    display:flex; flex-wrap:wrap; gap:6px; min-height:38px;
+    border:1px dashed var(--line); border-radius:10px; padding:8px 10px;
+    background:#F7F5EC;
+  }
+  .pool-chip{
+    display:inline-flex; align-items:center;
+    background:#E9E4CE; color:var(--ink); border-radius:999px; padding:5px 12px;
+    font-size:12.5px; font-weight:600;
+    cursor:grab; touch-action:none; user-select:none;
+  }
+  .pool-chip:active{ cursor:grabbing; }
+  .pool-chip.dragging-source{ opacity:.3; }
+
+  .drop-target-active{ outline:2px dashed var(--sky); outline-offset:2px; background:#EAF3F8 !important; }
+
+  .drag-ghost{
+    position:fixed; top:0; left:0; pointer-events:none; z-index:999;
+    display:inline-flex; align-items:center;
+    background:var(--sky); color:#fff; border-radius:999px; padding:5px 12px;
+    font-size:12.5px; font-weight:700; box-shadow:0 6px 14px rgba(0,0,0,0.25);
+    opacity:.95;
   }
   .chip-remove{
     border:none; background:rgba(0,0,0,0.08); color:var(--ink);
@@ -288,9 +317,16 @@
               <button class="btn btn-outline" data-add-car="応援車">＋応援車</button>
             </div>
           </div>
-          <div class="cars-grid" id="cars-container"></div>
           <button id="btn-auto-assign" class="btn btn-grass btn-large">🎲 選手車に自動配置する</button>
-          <p class="section-note">運転者に選んだ選手が出席していれば、できる限り同じ車に優先的に配置してから残りをランダムに埋めます。手動での入れ替え・追加も可能です。</p>
+          <p class="section-note">運転者に選んだ選手が出席していれば、できる限り同じ車に優先的に配置してから残りをランダムに埋めます。</p>
+
+          <div class="pool-section">
+            <div class="pool-label">未配置の出席選手（チップをドラッグして車に移動できます）</div>
+            <div class="unassigned-pool" id="unassigned-pool"></div>
+          </div>
+
+          <div class="cars-grid" id="cars-container"></div>
+          <p class="section-note">選手車のチップは、別の車や上の「未配置」枠へドラッグして移動できます。✕でも外せます。</p>
         </section>
 
         <section class="board-section">
@@ -536,7 +572,7 @@
       const chips = assignedIds.map(pid=>{
         const p = players.find(x=>x.id===pid);
         const name = p ? p.name : '（削除された選手）';
-        return `<span class="seat-chip">${escHtml(name)}<button type="button" class="chip-remove" data-action="remove-seat" data-car="${carId}" data-player="${pid}">✕</button></span>`;
+        return `<span class="seat-chip" data-player="${pid}" data-car="${carId}">${escHtml(name)}<button type="button" class="chip-remove" data-action="remove-seat" data-car="${carId}" data-player="${pid}">✕</button></span>`;
       }).join('');
       const unassigned = getUnassignedAttending();
       const addOptions = unassigned.map(p=>`<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
@@ -567,6 +603,16 @@
     </div>`;
   }
 
+  function renderUnassignedPool(){
+    const el = document.getElementById('unassigned-pool');
+    if(!el) return;
+    if(!currentTrip){ el.innerHTML=''; return; }
+    const list = getUnassignedAttending();
+    el.innerHTML = list.map(p=>
+      `<span class="pool-chip" data-player="${p.id}">${escHtml(p.name)}</span>`
+    ).join('') || '<span class="seat-empty">全員配置済みです</span>';
+  }
+
   function renderCarsSection(){
     const container = document.getElementById('cars-container');
     if(!currentTrip){ container.innerHTML=''; return; }
@@ -576,6 +622,108 @@
       if(car.type==='選手車'){ playerCarCount++; return carCardHtml(carId, car, playerCarCount); }
       return carCardHtml(carId, car, 0);
     }).join('') || '<p class="empty-state-inline">車が登録されていません。上のボタンから追加してください。</p>';
+  }
+
+  // ---------- drag & drop (pointer events, works on touch and mouse) ----------
+  let dragState = null;
+
+  function onChipPointerDown(e){
+    if(e.target.closest('.chip-remove')) return;
+    const chip = e.target.closest('.seat-chip, .pool-chip');
+    if(!chip) return;
+    if(e.button!=null && e.button!==0) return;
+    e.preventDefault();
+
+    const playerId = chip.dataset.player;
+    const fromCar = chip.dataset.car || null;
+
+    const rect = chip.getBoundingClientRect();
+    const ghost = chip.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    ghost.querySelectorAll('.chip-remove').forEach(b=> b.remove());
+    ghost.style.width = rect.width + 'px';
+    document.body.appendChild(ghost);
+    positionGhost(ghost, e.clientX, e.clientY);
+
+    chip.classList.add('dragging-source');
+
+    dragState = { playerId, fromCar, ghost, originEl: chip };
+    document.addEventListener('pointermove', onDragMove);
+    document.addEventListener('pointerup', onDragEnd);
+    document.addEventListener('pointercancel', onDragEnd);
+  }
+
+  function positionGhost(ghost, x, y){
+    ghost.style.left = (x + 14) + 'px';
+    ghost.style.top = (y + 14) + 'px';
+  }
+
+  function onDragMove(e){
+    if(!dragState) return;
+    positionGhost(dragState.ghost, e.clientX, e.clientY);
+    clearDropHighlights();
+    const target = findDropTarget(e.clientX, e.clientY);
+    if(target) target.classList.add('drop-target-active');
+  }
+
+  function findDropTarget(x, y){
+    const el = document.elementFromPoint(x, y);
+    if(!el) return null;
+    const carCard = el.closest('.car-card.is-player-car');
+    if(carCard) return carCard;
+    const pool = el.closest('#unassigned-pool');
+    if(pool) return pool;
+    return null;
+  }
+
+  function clearDropHighlights(){
+    document.querySelectorAll('.drop-target-active').forEach(el=> el.classList.remove('drop-target-active'));
+  }
+
+  function onDragEnd(e){
+    if(!dragState) return;
+    const { playerId, fromCar, ghost, originEl } = dragState;
+    clearDropHighlights();
+    const target = findDropTarget(e.clientX, e.clientY);
+    ghost.remove();
+    originEl.classList.remove('dragging-source');
+    document.removeEventListener('pointermove', onDragMove);
+    document.removeEventListener('pointerup', onDragEnd);
+    document.removeEventListener('pointercancel', onDragEnd);
+    dragState = null;
+    if(target) handleChipDrop(playerId, fromCar, target);
+  }
+
+  async function handleChipDrop(playerId, fromCarId, targetEl){
+    const toCarId = targetEl.classList.contains('car-card') ? targetEl.dataset.carId : null;
+    if(toCarId === fromCarId) return;
+    if(!toCarId && !fromCarId) return;
+
+    if(toCarId){
+      const dst = currentTrip.cars[toCarId];
+      if(!dst) return;
+      const cap = dst.capacity || 4;
+      const already = dst.assigned && dst.assigned[playerId];
+      const count = Object.keys(dst.assigned||{}).length;
+      if(!already && count >= cap){
+        showToast('満席のため移動できません');
+        return;
+      }
+    }
+
+    if(fromCarId){
+      const src = currentTrip.cars[fromCarId];
+      if(src && src.assigned) delete src.assigned[playerId];
+    }
+    if(toCarId){
+      const dst = currentTrip.cars[toCarId];
+      dst.assigned = dst.assigned || {};
+      dst.assigned[playerId] = true;
+    }
+    await saveTripNow();
+    renderCarsSection();
+    renderUnassignedPool();
+    refreshOutput();
   }
 
   // ---------- auto assign ----------
@@ -711,7 +859,7 @@
     manageGroup.hidden = false;
     document.getElementById('trip-name-edit').value = currentTrip.name;
     renderAttendance();
-    renderCarsSection();
+    renderCarsSection(); renderUnassignedPool();
     refreshOutput();
   }
 
@@ -783,7 +931,7 @@
       }
       renderRoster();
       renderAttendance();
-      renderCarsSection();
+      renderCarsSection(); renderUnassignedPool();
       refreshOutput();
     });
 
@@ -801,7 +949,7 @@
         currentTrip.attendance[t.dataset.id] = t.checked;
         await saveTripNow();
         renderAttendance();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }
     });
@@ -817,12 +965,16 @@
           assigned: {}
         };
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       });
     });
 
     const carsContainer = document.getElementById('cars-container');
+    const unassignedPool = document.getElementById('unassigned-pool');
+    carsContainer.addEventListener('pointerdown', onChipPointerDown);
+    unassignedPool.addEventListener('pointerdown', onChipPointerDown);
+
     carsContainer.addEventListener('change', async (e)=>{
       const t = e.target;
       const action = t.dataset.action;
@@ -842,7 +994,7 @@
           car.driverChildId = t.value || null;
         }
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }else if(action==='car-type'){
         car.type = t.value;
@@ -854,7 +1006,7 @@
           if(!car.assigned) car.assigned = {};
         }
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }else if(action==='car-capacity'){
         car.capacity = parseInt(t.value,10);
@@ -863,7 +1015,7 @@
           ids.slice(car.capacity).forEach(id=> delete car.assigned[id]);
         }
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }else if(action==='add-seat'){
         if(!t.value) return;
@@ -873,7 +1025,7 @@
           car.assigned[t.value] = true;
         }
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }
     });
@@ -894,13 +1046,13 @@
         if(!confirm('この車を削除しますか？')) return;
         delete currentTrip.cars[btn.dataset.id];
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }else if(action==='remove-seat'){
         const car = currentTrip.cars[btn.dataset.car];
         if(car && car.assigned){ delete car.assigned[btn.dataset.player]; }
         await saveTripNow();
-        renderCarsSection();
+        renderCarsSection(); renderUnassignedPool();
         refreshOutput();
       }
     });
@@ -911,7 +1063,7 @@
       if(!hasPlayerCar){ alert('先に「選手車」を追加してください。'); return; }
       autoAssign();
       await saveTripNow();
-      renderCarsSection();
+      renderCarsSection(); renderUnassignedPool();
       refreshOutput();
       showToast('選手を自動配置しました');
     });
