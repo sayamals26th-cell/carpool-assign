@@ -605,40 +605,71 @@
   }
 
   // ---------- output text ----------
+  function cleanName(name){
+    // LINE共有テキストでは「吉田(然)」→「吉田然」のようにカッコを外して表示する
+    return (name||'').replace(/[()（）]/g, '');
+  }
+
+  function wrapNamesToLines(names, maxCharsPerLine){
+    const withSuffix = names.map(n=> cleanName(n) + '君');
+    const lines = [];
+    let current = [];
+    let currentLen = 0;
+    withSuffix.forEach(n=>{
+      const addLen = n.length + 1; // 「、」の分
+      if(current.length>0 && currentLen + addLen > maxCharsPerLine){
+        lines.push(current);
+        current = [];
+        currentLen = 0;
+      }
+      current.push(n);
+      currentLen += addLen;
+    });
+    if(current.length) lines.push(current);
+    return lines;
+  }
+
+  function formatPlayerCarBlock(driverName, names){
+    if(names.length===0){
+      return `${cleanName(driverName) || '未設定'}車▶（未配置）`;
+    }
+    const lineGroups = wrapNamesToLines(names, 11);
+    return lineGroups.map((grp, idx)=>{
+      const isLast = idx===lineGroups.length-1;
+      const joined = grp.join('、') + (isLast ? '' : '、');
+      return idx===0 ? `${cleanName(driverName) || '未設定'}車▶${joined}` : `　　　${joined}`;
+    }).join('\n');
+  }
+
   function generateLineText(){
     if(!currentTrip) return '';
-    const icon = {'荷物車':'📦','選手車':'⚾','母当番車':'🍙','応援車':'📣'};
-    const order = ['荷物車','選手車','母当番車','応援車'];
+    const simpleLabel = {'荷物車':'道具','母当番車':'母当番','応援車':'応援'};
+    const carsAll = Object.values(currentTrip.cars||{});
     const lines = [];
-    lines.push(`📋 配車表：${currentTrip.name}`);
-    lines.push('――――――――――――');
-    order.forEach(type=>{
-      const cars = Object.values(currentTrip.cars||{}).filter(c=>c.type===type);
-      if(cars.length===0) return;
-      lines.push('');
-      lines.push(`【${icon[type]} ${type}】`);
-      if(type==='選手車'){
-        cars.forEach((c,i)=>{
-          const assignedIds = Object.keys(c.assigned||{}).filter(id=>c.assigned[id]);
-          lines.push(`${i+1}. ${c.driverName || '未設定'}（${assignedIds.length}名）`);
-          assignedIds.forEach(id=>{
-            const p = players.find(x=>x.id===id);
-            lines.push(`　　- ${p ? p.name : '不明'}`);
-          });
-        });
-      }else{
-        cars.forEach(c=>{
-          lines.push(`・${c.driverName || '未設定'}`);
-        });
-      }
+
+    ['荷物車','母当番車','応援車'].forEach(type=>{
+      carsAll.filter(c=>c.type===type).forEach(c=>{
+        lines.push(`${cleanName(c.driverName) || '未設定'}車▶${simpleLabel[type]}`);
+      });
     });
+
+    const playerCars = carsAll.filter(c=>c.type==='選手車');
+    playerCars.forEach((c, idx)=>{
+      const assignedIds = Object.keys(c.assigned||{}).filter(id=>c.assigned[id]);
+      const names = assignedIds.map(id=>{
+        const p = players.find(x=>x.id===id);
+        return p ? p.name : '不明';
+      });
+      if(idx>0) lines.push('');
+      lines.push(formatPlayerCarBlock(c.driverName, names));
+    });
+
     const unassigned = getUnassignedAttending();
     if(unassigned.length>0){
       lines.push('');
-      lines.push('【未配置】');
-      unassigned.forEach(p=> lines.push(`・${p.name}`));
+      lines.push('【未配置】' + unassigned.map(p=> cleanName(p.name)+'君').join('、'));
     }
-    lines.push('――――――――――――');
+
     return lines.join('\n');
   }
 
