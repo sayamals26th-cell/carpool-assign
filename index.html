@@ -795,6 +795,9 @@
     const carsAll = Object.values(currentTrip.cars||{});
     const lines = [];
 
+    lines.push(`${currentTrip.name}の配車です🚗`);
+    lines.push('');
+
     ['荷物車','母当番車','応援車'].forEach(type=>{
       carsAll.filter(c=>c.type===type).forEach(c=>{
         lines.push(`${cleanName(c.driverName) || '未設定'}車▶${simpleLabel[type]}`);
@@ -817,6 +820,9 @@
       lines.push('');
       lines.push('【未配置】' + unassigned.map(p=> cleanName(p.name)+'君').join('、'));
     }
+
+    lines.push('');
+    lines.push('車出しのご協力ありがとうございます。');
 
     return lines.join('\n');
   }
